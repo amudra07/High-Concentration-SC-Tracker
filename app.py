@@ -351,7 +351,7 @@ def build_positioning_chart():
     # ── approximate data -> pixel mapping (must match the layout below) ──
     X_RANGE = (-0.6, 4.3)
     Y_RANGE = (0, 760)
-    PLOT_W, PLOT_H = 820, 330  # inside the l/r/t/b margins set below
+    PLOT_W, PLOT_H = 1300, 330  # inside the l/r/t/b margins set below (matches the widened landscape container)
     px_per_x = PLOT_W / (X_RANGE[1] - X_RANGE[0])
     px_per_y = PLOT_H / (Y_RANGE[1] - Y_RANGE[0])
 
@@ -498,6 +498,7 @@ def render_category(category: str):
 
 def render_landscape():
     topbar()
+    md("<style>.block-container { max-width: 1400px !important; }</style>")
     md('<div class="eyebrow">LANDSCAPE OVERVIEW</div>')
     md('<h1 class="page-title">High-concentration SC delivery — technology landscape</h1>')
     n_with_conc = len(entries_with_concentration())
@@ -521,20 +522,17 @@ def render_landscape():
     st.markdown("<br>", unsafe_allow_html=True)
 
     fig = build_positioning_chart()
-    col_chart, col_side = st.columns([2.2, 1])
-    with col_chart:
-        st.plotly_chart(fig, use_container_width=True)
-    with col_side:
-        md("""
-        <div class="side-panel">
-            <b>READING THIS CHART</b>
-            Only entries with a directly comparable mg/mL figure are plotted. Enzyme co-formulation platforms
-            (ENHANZE, ALT-B4) enable large-volume delivery rather than raising concentration, so they sit
-            outside this axis.<br><br>
-            Points sharing a development stage are spread out slightly, and each name is placed by an
-            automatic layout pass that keeps labels from overlapping \u2014 hover any point for the developer too.
-        </div>
-        """)
+    st.plotly_chart(fig, use_container_width=True)
+    md("""
+    <div class="side-panel">
+        <b>READING THIS CHART</b>
+        Only entries with a directly comparable mg/mL figure are plotted. Enzyme co-formulation platforms
+        (ENHANZE, ALT-B4) enable large-volume delivery rather than raising concentration, so they sit
+        outside this axis.<br><br>
+        Points sharing a development stage are spread out slightly, and each name is placed by an
+        automatic layout pass that keeps labels from overlapping \u2014 hover any point for the developer too.
+    </div>
+    """)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
