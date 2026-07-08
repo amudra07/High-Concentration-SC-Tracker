@@ -83,22 +83,24 @@ st.markdown("""
         align-items: center;
     }
 
-    /* Home icon button (top right, on the dark bar) */
+    /* Back-to-home button (top left, plain readable text) */
     div[data-testid="stButton"] button[kind="primary"] {
-        background: transparent;
-        border: none;
-        color: #fff7ed;
-        font-size: 22px;
-        padding: 0;
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        border-radius: 8px;
+        color: #b45309;
+        font-weight: 700;
+        font-size: 13px;
+        padding: 6px 14px;
         min-height: 42px;
         height: 42px;
         width: 100%;
         box-shadow: none;
     }
     div[data-testid="stButton"] button[kind="primary"]:hover {
-        color: #fed7aa;
-        background: transparent;
-        border: none;
+        color: #9a3412;
+        background: #fff0dc;
+        border-color: #c2410c;
     }
 
     /* Category / ladder navigation buttons (secondary, card look) */
@@ -230,17 +232,15 @@ LADDER_POINTS = [
 def topbar():
     show_home = st.session_state.page != "home"
     if show_home:
-        col1, col2 = st.columns([11, 1])
+        col1, col2 = st.columns([2, 9])
+        with col1:
+            st.button("← Back to home", key="home_btn", type="primary", on_click=go_home)
     else:
-        col1 = st.container()
-        col2 = None
-    with col1:
+        col2 = st.container()
+    with col2:
         md(f"""
         <div class="topbar">SC TECH TRACKER &middot; last updated {LAST_UPDATED.isoformat()}</div>
         """)
-    if show_home:
-        with col2:
-            st.button("⌂", key="home_btn", type="primary", on_click=go_home, help="Back to executive summary")
 
 
 def render_card(entry):
@@ -316,6 +316,16 @@ def render_ladder():
 
 
 def build_positioning_chart():
+    """
+    Points sharing a development stage are jittered apart on x (as before).
+    Labels are the real technology names, placed via leader-line annotations
+    rather than printed inside the marker. Placement is chosen by a greedy
+    collision-avoidance pass: candidate offsets are tried in order of
+    increasing distance from the point, and the first one whose estimated
+    text bounding box doesn't overlap any already-placed label is used.
+    This is what actually prevents overlap regardless of how many points
+    cluster in one area \u2014 not a fixed rule like "always place above".
+    """
     plotted = sorted(entries_with_concentration(), key=lambda e: -e["concentration_mgml"])
 
     base_x = {}
@@ -338,20 +348,70 @@ def build_positioning_chart():
     for e in plotted:
         by_category.setdefault(e["category"], []).append(e)
 
-    id_to_number = {e["id"]: i + 1 for i, e in enumerate(plotted)}
+    # ── approximate data -> pixel mapping (must match the layout below) ──
+    X_RANGE = (-0.6, 4.3)
+    Y_RANGE = (0, 760)
+    PLOT_W, PLOT_H = 820, 330  # inside the l/r/t/b margins set below
+    px_per_x = PLOT_W / (X_RANGE[1] - X_RANGE[0])
+    px_per_y = PLOT_H / (Y_RANGE[1] - Y_RANGE[0])
+
+    def to_px(x, y):
+        return ((x - X_RANGE[0]) * px_per_x, (Y_RANGE[1] - y) * px_per_y)
+
+    def label_box(px, py, ax, ay, text):
+        cx, cy = px + ax, py + ay
+        w = max(24, len(text) * 5.6 + 10)
+        h = 15
+        return (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+
+    def overlaps(a, b, pad=3):
+        return not (a[2] + pad < b[0] or b[2] + pad < a[0] or a[3] + pad < b[1] or b[3] + pad < a[1])
+
+    # candidate offsets tried nearest-first; alternates side/direction
+    CANDIDATES = [
+        (0, -26), (0, 26),
+        (34, -22), (-34, -22), (34, 22), (-34, 22),
+        (55, -40), (-55, -40), (55, 40), (-55, 40),
+        (0, -55), (0, 55),
+        (75, -18), (-75, -18), (75, 18), (-75, 18),
+        (0, -80), (0, 80),
+        (95, 5), (-95, 5),
+    ]
+
+    placed_boxes = []
+    annotations = []
+    for e in plotted:
+        x = jittered_x[e["id"]]
+        y = e["concentration_mgml"]
+        px, py = to_px(x, y)
+        text = e["name"]
+        chosen = None
+        for ax, ay in CANDIDATES:
+            box = label_box(px, py, ax, ay, text)
+            if not any(overlaps(box, other) for other in placed_boxes):
+                chosen = (ax, ay, box)
+                break
+        if chosen is None:
+            ax, ay = CANDIDATES[-1]
+            chosen = (ax, ay, label_box(px, py, ax, ay, text))
+        ax, ay, box = chosen
+        placed_boxes.append(box)
+        annotations.append(dict(
+            x=x, y=y, text=text, showarrow=True,
+            arrowhead=0, arrowwidth=1, arrowcolor="#cbd5e1",
+            ax=ax, ay=ay, font={"size": 10, "color": "#475569"},
+            bgcolor="rgba(255,255,255,0.85)",
+        ))
 
     fig = go.Figure()
     for category, items in by_category.items():
         fig.add_trace(go.Scatter(
             x=[jittered_x[e["id"]] for e in items],
             y=[e["concentration_mgml"] for e in items],
-            mode="markers+text",
+            mode="markers",
             name=category,
-            text=[str(id_to_number[e["id"]]) for e in items],
-            textposition="middle center",
-            textfont={"size": 10, "color": "white"},
             marker={
-                "size": [30 if e.get("is_internal") else 22 for e in items],
+                "size": [24 if e.get("is_internal") else 17 for e in items],
                 "color": (CATEGORY_COLOR.get(category, "#94a3b8") if category != "Suspension / particle"
                           else ["#ef4444" if e.get("is_internal") else CATEGORY_COLOR[category] for e in items]),
                 "line": {"width": 2, "color": "white"},
@@ -366,19 +426,19 @@ def build_positioning_chart():
             "tickmode": "array",
             "tickvals": STAGE_TICKS,
             "ticktext": STAGE_LABELS,
-            "range": [-0.6, 4.3],
+            "range": [X_RANGE[0], X_RANGE[1]],
             "gridcolor": "#f1f5f9",
         },
-        yaxis={"title": "Concentration (mg/mL)", "range": [0, 760], "gridcolor": "#f1f5f9"},
+        yaxis={"title": "Concentration (mg/mL)", "range": [Y_RANGE[0], Y_RANGE[1]], "gridcolor": "#f1f5f9"},
         height=460,
         margin={"t": 60, "b": 70, "l": 60, "r": 20},
         plot_bgcolor="white",
         paper_bgcolor="white",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0, "font": {"size": 11}},
+        annotations=annotations,
     )
 
-    key_lines = [(id_to_number[e["id"]], e["name"], e["developer"], e["concentration_mgml"]) for e in plotted]
-    return fig, key_lines
+    return fig
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -460,16 +520,10 @@ def render_landscape():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    fig, key_lines = build_positioning_chart()
+    fig = build_positioning_chart()
     col_chart, col_side = st.columns([2.2, 1])
     with col_chart:
         st.plotly_chart(fig, use_container_width=True)
-        md('<div style="font-size:11px; color:#64748b; margin-top:-8px;">Reference key:</div>')
-        key_html = "".join(
-            f'<span style="font-size:11px; color:#374151; margin-right:14px;"><strong>{n}</strong> {name} ({dev}) &mdash; {conc} mg/mL</span>'
-            for n, name, dev, conc in key_lines
-        )
-        md(f'<div style="line-height:2.1;">{key_html}</div>')
     with col_side:
         md("""
         <div class="side-panel">
@@ -477,8 +531,8 @@ def render_landscape():
             Only entries with a directly comparable mg/mL figure are plotted. Enzyme co-formulation platforms
             (ENHANZE, ALT-B4) enable large-volume delivery rather than raising concentration, so they sit
             outside this axis.<br><br>
-            Points sharing a development stage are spread out slightly so markers and numbers never overlap —
-            hover any point, or check the reference key below the chart, for the full name.
+            Points sharing a development stage are spread out slightly, and each name is placed by an
+            automatic layout pass that keeps labels from overlapping \u2014 hover any point for the developer too.
         </div>
         """)
 
