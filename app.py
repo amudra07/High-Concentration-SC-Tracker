@@ -14,16 +14,28 @@ Run with: streamlit run app.py
 import streamlit as st
 import plotly.graph_objects as go
 
-from tech_landscape_data import (
-    ENTRIES,
-    LAST_UPDATED,
-    CATEGORIES,
-    CATEGORY_META,
-    entries_with_concentration,
-    entries_by_category,
-)
+import db
+import claude_extract
+from tech_landscape_data import CATEGORIES, CATEGORY_META
 
 st.set_page_config(page_title="SC Tech Tracker", page_icon="💉", layout="wide")
+
+db.init_db()
+
+
+def entries_with_concentration():
+    return db.entries_with_concentration("curated")
+
+
+def entries_by_category(category):
+    return db.entries_by_category(category, "curated")
+
+
+def _last_updated():
+    curated = db.get_entries("curated")
+    if not curated:
+        return "n/a"
+    return max(e["updated_at"][:10] for e in curated)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML helper — flattens leading whitespace on every line before rendering.
@@ -59,6 +71,10 @@ def go_category(cat):
 
 def go_landscape():
     st.session_state.page = "landscape"
+
+
+def go_review():
+    st.session_state.page = "review"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -237,16 +253,18 @@ LADDER_POINTS = [
 # ─────────────────────────────────────────────────────────────────────────────
 def topbar():
     show_home = st.session_state.page != "home"
-    if show_home:
-        col1, col2 = st.columns([2, 9])
-        with col1:
+    n_pending = len(db.get_entries("staging"))
+    col1, col2, col3 = st.columns([2, 7, 2])
+    with col1:
+        if show_home:
             st.button("← Back to home", key="home_btn", type="primary", on_click=go_home)
-    else:
-        col2 = st.container()
     with col2:
         md(f"""
-        <div class="topbar">SC TECH TRACKER &middot; last updated {LAST_UPDATED.isoformat()}</div>
+        <div class="topbar">SC TECH TRACKER &middot; last updated {_last_updated()}</div>
         """)
+    with col3:
+        label = f"📋 {n_pending} pending" if n_pending else "📋 Review"
+        st.button(label, key="review_btn", on_click=go_review, use_container_width=True)
 
 
 def render_card(entry):
@@ -456,6 +474,21 @@ def render_home():
     md('<h1 class="page-title">Four paths to high-concentration SC delivery — Positioning of our technology</h1>')
     md('<div class="subtitle">Click a numbered box to see that category\'s technologies. Click the ladder to see the full landscape.</div>')
 
+    _, refresh_col = st.columns([3, 1])
+    with refresh_col:
+        if st.button("🔄 Refresh intelligence", key="refresh_btn", use_container_width=True):
+            try:
+                claude_extract.get_api_key()  # fail fast, before burning 4 searches
+            except claude_extract.MissingAPIKeyError as exc:
+                st.error(str(exc))
+            else:
+                with st.spinner("Searching all 4 categories — this can take a minute or two..."):
+                    candidates = claude_extract.search_all_categories()
+                    db.add_staging_entries(candidates)
+                st.success(f"Found {len(candidates)} candidate(s). Review them before they go live.")
+                go_review()
+                st.rerun()
+
     ordered = sorted(CATEGORIES, key=lambda c: CATEGORY_META[c]["number"])
     cols = st.columns(4)
     for col, category in zip(cols, ordered):
@@ -507,17 +540,18 @@ def render_landscape():
     md("<style>.block-container { max-width: 1400px !important; }</style>")
     md('<div class="eyebrow">LANDSCAPE OVERVIEW</div>')
     md('<h1 class="page-title">High-concentration SC delivery — technology landscape</h1>')
+    curated = db.get_entries("curated")
     n_with_conc = len(entries_with_concentration())
     top = max(entries_with_concentration(), key=lambda e: e["concentration_mgml"])
-    n_commercial = sum(1 for e in ENTRIES if e["phase"] == "Commercial")
+    n_commercial = sum(1 for e in curated if e["phase"] == "Commercial")
     md(
-        f'<div class="subtitle">Benchmarks Dupixent and our internal platforms against {len(ENTRIES)} tracked '
+        f'<div class="subtitle">Benchmarks Dupixent and our internal platforms against {len(curated)} tracked '
         f'high-concentration and large-volume subcutaneous delivery technologies.</div>'
     )
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        md(f'<div class="kpi"><div class="v">{len(ENTRIES)}</div><div class="l">Technologies tracked</div></div>')
+        md(f'<div class="kpi"><div class="v">{len(curated)}</div><div class="l">Technologies tracked</div></div>')
     with k2:
         md(f'<div class="kpi"><div class="v">{n_with_conc}</div><div class="l">With a comparable mg/mL</div></div>')
     with k3:
@@ -541,6 +575,60 @@ def render_landscape():
     """)
 
 
+def render_review():
+    topbar()
+    md('<div class="eyebrow">HUMAN REVIEW</div>')
+    md('<h1 class="page-title">Pending intelligence candidates</h1>')
+
+    staged = db.get_entries("staging")
+    if not staged:
+        md('<div class="subtitle">Nothing pending. Run "Refresh intelligence" from the home page to search for updates.</div>')
+        return
+
+    md(f'<div class="subtitle">{len(staged)} candidate(s) found by Claude, not yet on the dashboard. '
+       f'Approve, edit, or reject each before it becomes visible.</div>')
+
+    CONFIDENCE_THRESHOLD = 0.75
+
+    for entry in staged:
+        conf = entry.get("confidence", 0.5) or 0.0
+        if conf >= CONFIDENCE_THRESHOLD:
+            conf_color, conf_label = "#15803d", "High confidence"
+        elif conf >= 0.4:
+            conf_color, conf_label = "#b45309", "Medium confidence"
+        else:
+            conf_color, conf_label = "#b91c1c", "Low confidence"
+
+        render_card(entry)
+        md(f'<div style="margin-top:-10px; margin-bottom:8px; font-size:11px; '
+           f'color:{conf_color}; font-weight:700;">{conf_label} ({conf:.2f})</div>')
+
+        c1, c2, c3 = st.columns([1, 1, 1])
+        with c1:
+            if st.button("✅ Approve", key=f"approve-{entry['id']}", use_container_width=True):
+                db.approve_entry(entry["id"])
+                st.rerun()
+        with c2:
+            with st.popover("✏️ Edit", use_container_width=True):
+                new_conc = st.number_input(
+                    "Concentration (mg/mL)", value=float(entry.get("concentration_mgml") or 0.0),
+                    key=f"conc-{entry['id']}",
+                )
+                phases = ["Proof-of-concept", "Platform PoC", "Preclinical", "Phase 1",
+                          "Phase 3", "Commercial", "CDMO service available"]
+                current_phase = entry.get("phase") if entry.get("phase") in phases else phases[0]
+                new_phase = st.selectbox("Phase", phases, index=phases.index(current_phase), key=f"phase-{entry['id']}")
+                if st.button("Save edits", key=f"save-{entry['id']}"):
+                    db.update_staging_entry(entry["id"], {"concentration_mgml": new_conc, "phase": new_phase})
+                    st.rerun()
+        with c3:
+            if st.button("❌ Reject", key=f"reject-{entry['id']}", use_container_width=True):
+                db.reject_entry(entry["id"])
+                st.rerun()
+
+        st.markdown("<hr style='margin:8px 0 20px; border-color:#f1f5f9;'>", unsafe_allow_html=True)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Router
 # ─────────────────────────────────────────────────────────────────────────────
@@ -550,5 +638,7 @@ elif st.session_state.page == "category":
     render_category(st.session_state.category)
 elif st.session_state.page == "landscape":
     render_landscape()
+elif st.session_state.page == "review":
+    render_review()
 else:
     render_home()
