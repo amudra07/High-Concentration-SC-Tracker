@@ -216,6 +216,12 @@ CATEGORY_COLOR = {
     "Crystalline": "#8b5cf6",
 }
 
+# Display label used only for the chart legend — keeps the underlying
+# category name (used for cards, routing, colors) unchanged.
+CATEGORY_LEGEND_LABEL = {
+    "Suspension / particle": "Target Concentration",
+}
+
 CIRCLED_DIGITS = {1: "①", 2: "②", 3: "③", 4: "④"}
 
 LADDER_MAX = 800
@@ -409,7 +415,7 @@ def build_positioning_chart():
             x=[jittered_x[e["id"]] for e in items],
             y=[e["concentration_mgml"] for e in items],
             mode="markers",
-            name=category,
+            name=CATEGORY_LEGEND_LABEL.get(category, category),
             marker={
                 "size": [24 if e.get("is_internal") else 17 for e in items],
                 "color": (CATEGORY_COLOR.get(category, "#94a3b8") if category != "Suspension / particle"
@@ -447,7 +453,7 @@ def build_positioning_chart():
 def render_home():
     topbar()
     md('<div class="eyebrow">EXECUTIVE SUMMARY</div>')
-    md('<h1 class="page-title">Four paths to high-concentration SC delivery — and where 700 mg/mL sits</h1>')
+    md('<h1 class="page-title">Four paths to high-concentration SC delivery — Positioning of our technology</h1>')
     md('<div class="subtitle">Click a numbered box to see that category\'s technologies. Click the ladder to see the full landscape.</div>')
 
     ordered = sorted(CATEGORIES, key=lambda c: CATEGORY_META[c]["number"])
@@ -515,7 +521,7 @@ def render_landscape():
     with k2:
         md(f'<div class="kpi"><div class="v">{n_with_conc}</div><div class="l">With a comparable mg/mL</div></div>')
     with k3:
-        md(f'<div class="kpi"><div class="v">{top["concentration_mgml"]}+</div><div class="l">Highest reported ({top["name"]})</div></div>')
+        md(f'<div class="kpi"><div class="v">{top["concentration_mgml"]}+</div><div class="l">Targeted {top["name"]} Concentration</div></div>')
     with k4:
         md(f'<div class="kpi"><div class="v">{n_commercial}</div><div class="l">Already commercial</div></div>')
 
